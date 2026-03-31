@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from pathlib import Path
 from threading import Thread
 from time import monotonic, sleep
@@ -12,6 +13,13 @@ try:
     import plotly.graph_objects as go
 except ImportError:  # pragma: no cover - depends on optional dependency
     go = None
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:  # pragma: no cover - depends on optional dependency
+    Image = None
+    ImageDraw = None
+    ImageFont = None
 
 
 class LiveConvergencePlot:
@@ -41,9 +49,16 @@ class LiveConvergencePlot:
         self._total_generations: int | None = None
         self.live_output_path: Path | None = None
         self.live_refresh_interval_seconds = 2.0
+        self.gif_output_path: Path | None = None
+        self.gif_frame_duration_seconds = 2.0
+        self.gif_max_frames = 10
         self._last_live_publish_at = 0.0
         self._live_browser_opened = False
         self._live_browser_launch_started = False
+        self.gif_disabled_reason: str | None = None
+        self._gif_target_generations: list[int] = []
+        self._gif_checkpoint_generations: list[int] = []
+        self._gif_target_cursor = 0
 
         if not enabled:
             self.disabled_reason = "Live plotting disabled by configuration."
@@ -75,6 +90,7 @@ class LiveConvergencePlot:
             raise ValueError("total_generations must be non-negative.")
 
         self._total_generations = int(total_generations)
+        self._reset_gif_targets()
         if self.figure is not None:
             self._apply_title(self.figure)
 
@@ -96,6 +112,7 @@ class LiveConvergencePlot:
         self._generations.append(int(generation))
         self._best_history.append(float(best_evaluation))
         self._mean_history.append(float(mean_evaluation))
+        self._record_gif_checkpoint(generation)
 
     def configure_live_updates(
         self,
@@ -120,6 +137,34 @@ class LiveConvergencePlot:
         self._last_live_publish_at = 0.0
         self._live_browser_opened = False
         self._live_browser_launch_started = False
+
+    def configure_gif_capture(
+        self,
+        output_path: str | Path,
+        frame_duration_seconds: float = 2.0,
+        max_frames: int = 10,
+    ) -> None:
+        """Configure animated GIF capture for live convergence history.
+
+        Args:
+            output_path: GIF file written from captured progress frames.
+            frame_duration_seconds: Playback duration per GIF frame.
+            max_frames: Maximum number of evenly spaced frames to include.
+
+        Raises:
+            ValueError: If the frame duration is not positive or max_frames is invalid.
+        """
+
+        if frame_duration_seconds <= 0:
+            raise ValueError("frame_duration_seconds must be greater than 0.")
+        if max_frames < 2:
+            raise ValueError("max_frames must be at least 2.")
+
+        self.gif_output_path = Path(output_path)
+        self.gif_frame_duration_seconds = float(frame_duration_seconds)
+        self.gif_max_frames = int(max_frames)
+        self.gif_disabled_reason = None
+        self._reset_gif_targets()
 
     def publish_live(
         self,
@@ -161,6 +206,8 @@ class LiveConvergencePlot:
         self._last_live_publish_at = now
 
         if final:
+            self._record_gif_checkpoint(self._current_generation, force=True)
+            self._write_gif()
             return True
 
         if not self._live_browser_opened and not self._live_browser_launch_started:
@@ -293,6 +340,197 @@ class LiveConvergencePlot:
             f'<meta http-equiv="refresh" content="{refresh_seconds:.3f}">'  # noqa: E501
         )
         return html.replace("<head>", f"<head>\n    {refresh_tag}", 1)
+
+    def _render_gif_frame(self, generation: int) -> Any | None:
+        """Render the recorded convergence history to a static image frame."""
+
+        if Image is None or ImageDraw is None or ImageFont is None:
+            return None
+
+        history_limit = bisect_right(self._generations, generation)
+        generations = self._generations[:history_limit]
+        best_history = self._best_history[:history_limit]
+        mean_history = self._mean_history[:history_limit]
+
+        width = 1000
+        height = 600
+        margin_left = 90
+        margin_right = 40
+        margin_top = 70
+        margin_bottom = 70
+        plot_left = margin_left
+        plot_right = width - margin_right
+        plot_top = margin_top
+        plot_bottom = height - margin_bottom
+
+        image = Image.new("RGB", (width, height), "white")
+        draw = ImageDraw.Draw(image)
+        font = ImageFont.load_default()
+
+        title = (
+            f"Differential Evolution Convergence ({self.mode.title()})"
+            f" - Generation {generation}/"
+            f"{self._total_generations if self._total_generations is not None else '?'}"
+        )
+        draw.text((margin_left, 20), title, fill="black", font=font)
+
+        draw.rectangle((plot_left, plot_top, plot_right, plot_bottom), outline="black", width=2)
+
+        if not generations:
+            return image
+
+        y_values = best_history + mean_history
+        y_min = min(y_values)
+        y_max = max(y_values)
+        if y_min == y_max:
+            padding = max(1.0, abs(y_min) * 0.05, 1e-6)
+            y_min -= padding
+            y_max += padding
+        else:
+            padding = (y_max - y_min) * 0.1
+            y_min -= padding
+            y_max += padding
+
+        x_min = generations[0]
+        x_max = generations[-1]
+
+        def x_to_px(value: int) -> float:
+            if x_max == x_min:
+                return float((plot_left + plot_right) / 2)
+            return plot_left + (value - x_min) * (plot_right - plot_left) / (x_max - x_min)
+
+        def y_to_px(value: float) -> float:
+            return plot_bottom - (value - y_min) * (plot_bottom - plot_top) / (y_max - y_min)
+
+        for step in range(6):
+            y_value = y_min + step * (y_max - y_min) / 5
+            y_pixel = y_to_px(y_value)
+            draw.line((plot_left, y_pixel, plot_right, y_pixel), fill="#dddddd", width=1)
+            draw.text((10, y_pixel - 6), f"{y_value:.3g}", fill="black", font=font)
+
+        for step in range(6):
+            x_value = int(round(x_min + step * (x_max - x_min) / 5))
+            x_pixel = x_to_px(x_value)
+            draw.line((x_pixel, plot_top, x_pixel, plot_bottom), fill="#f0f0f0", width=1)
+            draw.text((x_pixel - 10, plot_bottom + 10), str(x_value), fill="black", font=font)
+
+        best_points = [
+            (x_to_px(generation), y_to_px(value))
+            for generation, value in zip(generations, best_history, strict=False)
+        ]
+        mean_points = [
+            (x_to_px(generation), y_to_px(value))
+            for generation, value in zip(generations, mean_history, strict=False)
+        ]
+
+        if len(best_points) > 1:
+            draw.line(best_points, fill="#1f77b4", width=3)
+        elif best_points:
+            x_pixel, y_pixel = best_points[0]
+            draw.ellipse((x_pixel - 3, y_pixel - 3, x_pixel + 3, y_pixel + 3), fill="#1f77b4")
+
+        if len(mean_points) > 1:
+            draw.line(mean_points, fill="#ff7f0e", width=3)
+        elif mean_points:
+            x_pixel, y_pixel = mean_points[0]
+            draw.ellipse((x_pixel - 3, y_pixel - 3, x_pixel + 3, y_pixel + 3), fill="#ff7f0e")
+
+        legend_top = plot_top + 10
+        legend_left = plot_right - 200
+        draw.line((legend_left, legend_top, legend_left + 25, legend_top), fill="#1f77b4", width=3)
+        draw.text((legend_left + 35, legend_top - 8), "Best Evaluation", fill="black", font=font)
+        draw.line((legend_left, legend_top + 25, legend_left + 25, legend_top + 25), fill="#ff7f0e", width=3)
+        draw.text((legend_left + 35, legend_top + 17), "Mean Evaluation", fill="black", font=font)
+
+        draw.text((width / 2 - 35, height - 30), "Generation", fill="black", font=font)
+        draw.text((15, plot_top - 25), "Evaluation", fill="black", font=font)
+
+        return image
+
+    def _write_gif(self) -> bool:
+        """Write the captured frames to an animated GIF file."""
+
+        if self.gif_output_path is None or not self._gif_checkpoint_generations:
+            return False
+
+        if Image is None:
+            self.gif_disabled_reason = "Pillow is not installed in the current environment."
+            return False
+
+        images: list[Any] = []
+        try:
+            for generation in self._gif_checkpoint_generations:
+                frame = self._render_gif_frame(generation)
+                if frame is None:
+                    return False
+                images.append(frame.convert("P", palette=Image.Palette.ADAPTIVE))
+
+            self.gif_output_path.parent.mkdir(parents=True, exist_ok=True)
+            images[0].save(
+                self.gif_output_path,
+                save_all=True,
+                append_images=images[1:],
+                duration=max(int(self.gif_frame_duration_seconds * 1000), 1),
+                loop=0,
+                disposal=2,
+            )
+        except Exception as exc:  # pragma: no cover - filesystem/encoder dependent
+            self.gif_disabled_reason = str(exc)
+            return False
+        finally:
+            for image in images:
+                image.close()
+
+        self.gif_disabled_reason = None
+        return True
+
+    def _reset_gif_targets(self) -> None:
+        """Reset GIF checkpoint planning based on the current configuration."""
+
+        self._gif_checkpoint_generations = []
+        self._gif_target_cursor = 0
+        self._gif_target_generations = []
+
+        if self.gif_output_path is None or self._total_generations is None:
+            return
+
+        max_generation = self._total_generations
+        frame_count = min(self.gif_max_frames, max_generation + 1)
+        if frame_count < 2:
+            frame_count = 2
+
+        targets = {
+            int(round(step * max_generation / (frame_count - 1)))
+            for step in range(frame_count)
+        }
+        targets.add(0)
+        targets.add(max_generation)
+        self._gif_target_generations = sorted(targets)
+
+    def _record_gif_checkpoint(self, generation: int, force: bool = False) -> None:
+        """Record evenly spaced GIF checkpoints with negligible optimizer overhead."""
+
+        if self.gif_output_path is None:
+            return
+
+        if not self._gif_target_generations:
+            self._reset_gif_targets()
+
+        if force:
+            if not self._gif_checkpoint_generations or self._gif_checkpoint_generations[-1] != int(generation):
+                self._gif_checkpoint_generations.append(int(generation))
+
+        while self._gif_target_cursor < len(self._gif_target_generations):
+            target_generation = self._gif_target_generations[self._gif_target_cursor]
+            if target_generation > generation:
+                break
+
+            if (
+                not self._gif_checkpoint_generations
+                or self._gif_checkpoint_generations[-1] != target_generation
+            ):
+                self._gif_checkpoint_generations.append(target_generation)
+            self._gif_target_cursor += 1
 
     def _open_live_browser(
         self,

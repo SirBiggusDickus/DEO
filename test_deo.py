@@ -169,6 +169,7 @@ def run_demo(
         np.array([2.0, -2.0]),
     ]
     plot_path = Path(__file__).with_name(plot_name)
+    gif_path = plot_path.with_suffix(".gif")
 
     optimizer = DifferentialEvolutionOptimizer(
         objective_function=objective_function,
@@ -181,6 +182,9 @@ def run_demo(
         live_plot=True,
         mode=mode,
         live_plot_path=plot_path,
+        live_gif_path=gif_path,
+        live_gif_max_frames=10,
+        live_gif_frame_duration_seconds=0.5,
         live_plot_refresh_seconds=2.0,
     )
 
@@ -207,9 +211,16 @@ def run_demo(
     print("Live plot enabled:", optimizer.live_plot)
     print("Live plot refresh seconds:", optimizer.live_plot_refresh_seconds)
     print("Plot file:", plot_path)
+    print("GIF file:", gif_path)
+    print("GIF checkpoint count:", optimizer.live_gif_max_frames)
+    print("GIF frame duration seconds:", optimizer.live_gif_frame_duration_seconds)
     print(
         "Plot note:",
         "generation 0 is written immediately, the page refreshes during optimization, and the final write stops refreshing when optimization finishes.",
+    )
+    print(
+        "GIF note:",
+        "the optimizer records evenly spaced checkpoints during the run and assembles the GIF after optimization completes.",
     )
     print("Internal search normalization:", "enabled, unit hypercube [0, 1]^n")
     print("Dimension count:", len(bounds))
@@ -238,6 +249,10 @@ def run_demo(
             f"{optimizer.live_plot_refresh_seconds:.1f} seconds at: "
             f"{optimizer.plot.live_output_path}"
         )
+        if optimizer.plot.gif_output_path is not None:
+            print(f"{name} convergence GIF saved at: {optimizer.plot.gif_output_path}")
+        if optimizer.plot.gif_disabled_reason:
+            print(f"{name} convergence GIF was not created: {optimizer.plot.gif_disabled_reason}")
     elif optimizer.plot.show(renderer="browser"):
         print(f"{name} convergence plot opened in your default browser.")
     elif optimizer.plot.disabled_reason:

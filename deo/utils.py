@@ -9,6 +9,7 @@ import numpy as np
 
 Bounds: TypeAlias = tuple[tuple[float, float], ...]
 Vector: TypeAlias = np.ndarray
+VectorLike: TypeAlias = Sequence[float] | np.ndarray
 
 
 def unit_bounds(dimension: int) -> Bounds:
@@ -30,7 +31,7 @@ def unit_bounds(dimension: int) -> Bounds:
     return tuple((0.0, 1.0) for _ in range(dimension))
 
 
-def normalize_vector(x: Sequence[float], bounds: Bounds) -> Vector:
+def normalize_vector(x: VectorLike, bounds: Bounds) -> Vector:
     """Map a candidate from original bounds into the unit hypercube.
 
     Args:
@@ -55,7 +56,7 @@ def normalize_vector(x: Sequence[float], bounds: Bounds) -> Vector:
     return (candidate - lower_bounds) / (upper_bounds - lower_bounds)
 
 
-def denormalize_vector(x: Sequence[float], bounds: Bounds) -> Vector:
+def denormalize_vector(x: VectorLike, bounds: Bounds) -> Vector:
     """Map a normalized candidate from the unit hypercube into original bounds.
 
     Args:
@@ -131,7 +132,7 @@ def random_vector(bounds: Bounds, rng: np.random.Generator) -> Vector:
     return rng.uniform(lower_bounds, upper_bounds)
 
 
-def clip_to_bounds(x: Sequence[float], bounds: Bounds) -> Vector:
+def clip_to_bounds(x: VectorLike, bounds: Bounds) -> Vector:
     """Project a candidate vector back into the feasible bound range.
 
     Args:

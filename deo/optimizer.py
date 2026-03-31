@@ -46,6 +46,9 @@ class DifferentialEvolutionOptimizer:
         live_plot: bool = True,
         mode: str = "minimize",
         live_plot_path: str | Path | None = None,
+        live_gif_path: str | Path | None = None,
+        live_gif_max_frames: int = 10,
+        live_gif_frame_duration_seconds: float = 0.5,
         live_plot_refresh_seconds: float = 2.0,
         show_progress: bool = True,
     ) -> None:
@@ -70,6 +73,12 @@ class DifferentialEvolutionOptimizer:
                 ``"maximize"``.
             live_plot_path: Optional HTML file path for browser-based live plot
                 publishing during optimization.
+            live_gif_path: Optional GIF file path that stores the published
+                convergence snapshots as an animation.
+            live_gif_max_frames: Maximum number of evenly spaced convergence
+                checkpoints to include in the GIF animation.
+            live_gif_frame_duration_seconds: Playback duration of each GIF
+                frame in seconds.
             live_plot_refresh_seconds: Time between live HTML refreshes.
             show_progress: Whether to display a tqdm progress bar while the
                 optimizer runs.
@@ -99,6 +108,10 @@ class DifferentialEvolutionOptimizer:
             raise ValueError("clone_ratio must be between 0 and 1 inclusive.")
         if mode not in {"minimize", "maximize"}:
             raise ValueError("mode must be either 'minimize' or 'maximize'.")
+        if live_gif_max_frames < 2:
+            raise ValueError("live_gif_max_frames must be at least 2.")
+        if live_gif_frame_duration_seconds <= 0:
+            raise ValueError("live_gif_frame_duration_seconds must be greater than 0.")
         if live_plot_refresh_seconds <= 0:
             raise ValueError("live_plot_refresh_seconds must be greater than 0.")
 
@@ -116,6 +129,9 @@ class DifferentialEvolutionOptimizer:
         self.live_plot = bool(live_plot)
         self.mode = mode
         self.live_plot_path = Path(live_plot_path) if live_plot_path is not None else None
+        self.live_gif_path = Path(live_gif_path) if live_gif_path is not None else None
+        self.live_gif_max_frames = int(live_gif_max_frames)
+        self.live_gif_frame_duration_seconds = float(live_gif_frame_duration_seconds)
         self.live_plot_refresh_seconds = float(live_plot_refresh_seconds)
         self.show_progress = bool(show_progress)
 
@@ -126,6 +142,12 @@ class DifferentialEvolutionOptimizer:
             self.plot.configure_live_updates(
                 output_path=self.live_plot_path,
                 refresh_interval_seconds=self.live_plot_refresh_seconds,
+            )
+        if self.live_gif_path is not None:
+            self.plot.configure_gif_capture(
+                output_path=self.live_gif_path,
+                frame_duration_seconds=self.live_gif_frame_duration_seconds,
+                max_frames=self.live_gif_max_frames,
             )
 
         self.population: np.ndarray | None = None
@@ -253,6 +275,9 @@ class DifferentialEvolutionOptimizer:
                 )
 
         self.plot.publish_live(force=True, final=True)
+
+        if self.best_vector is None or self.best_evaluation is None:
+            raise RuntimeError("Optimizer completed without a recorded best solution.")
 
         return self.best_vector.copy(), float(self.best_evaluation)
 

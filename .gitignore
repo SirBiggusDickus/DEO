@@ -34,3 +34,4 @@ Thumbs.db
 # Generated convergence outputs
 convergence.png
 convergence_plot*.html
+convergence_plot*.gif
