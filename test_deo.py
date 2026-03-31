@@ -294,7 +294,7 @@ def main() -> None:
         bounds=BALANCE_BOUNDS,
         seeds=BALANCE_SEEDS,
         pop_size=40,
-        max_generations=14000,
+        max_generations=70,
         clone_ratio=0.6,
         random_state=321,
     )

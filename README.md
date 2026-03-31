@@ -2,7 +2,7 @@
 
 This project contains a custom Differential Evolution Optimizer implemented in Python with Plotly-based convergence visualization.
 
-![Representative convergence plot](convergence_plot_maximize.gif)
+![Representative convergence plot](convergence_example.gif)
 
 The optimizer is built around the `DE/best/1/bin` strategy and supports:
 
