@@ -168,6 +168,7 @@ def run_demo(
         np.array([-4.0, 4.0]),
         np.array([2.0, -2.0]),
     ]
+    plot_path = Path(__file__).with_name(plot_name)
 
     optimizer = DifferentialEvolutionOptimizer(
         objective_function=objective_function,
@@ -179,6 +180,8 @@ def run_demo(
         random_state=random_state,
         live_plot=True,
         mode=mode,
+        live_plot_path=plot_path,
+        live_plot_refresh_seconds=2.0,
     )
 
     print(f"\n=== {name} Run Configuration ===")
@@ -202,6 +205,12 @@ def run_demo(
     )
     print("Random state:", optimizer.random_state)
     print("Live plot enabled:", optimizer.live_plot)
+    print("Live plot refresh seconds:", optimizer.live_plot_refresh_seconds)
+    print("Plot file:", plot_path)
+    print(
+        "Plot note:",
+        "generation 0 is written immediately, the page refreshes during optimization, and the final write stops refreshing when optimization finishes.",
+    )
     print("Internal search normalization:", "enabled, unit hypercube [0, 1]^n")
     print("Dimension count:", len(bounds))
     print("Seed count:", len(seeds))
@@ -223,11 +232,13 @@ def run_demo(
     print(f"{name} initialized clone count:", initialization.clone_count)
     print(f"{name} initialized random count:", initialization.random_count)
 
-    plot_path = Path(__file__).with_name(plot_name)
-    if optimizer.plot.save_html(plot_path):
-        print(f"{name} convergence plot saved to: {plot_path}")
-
-    if optimizer.plot.show(renderer="browser"):
+    if optimizer.plot.live_output_path is not None:
+        print(
+            f"{name} convergence plot refreshed every "
+            f"{optimizer.live_plot_refresh_seconds:.1f} seconds at: "
+            f"{optimizer.plot.live_output_path}"
+        )
+    elif optimizer.plot.show(renderer="browser"):
         print(f"{name} convergence plot opened in your default browser.")
     elif optimizer.plot.disabled_reason:
         print(f"{name} convergence plot was not shown: {optimizer.plot.disabled_reason}")
@@ -268,7 +279,7 @@ def main() -> None:
         bounds=BALANCE_BOUNDS,
         seeds=BALANCE_SEEDS,
         pop_size=40,
-        max_generations=140,
+        max_generations=14000,
         clone_ratio=0.6,
         random_state=321,
     )

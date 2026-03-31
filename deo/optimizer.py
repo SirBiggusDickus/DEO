@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 import numpy as np
+from tqdm.auto import tqdm
 
 from .plotting import LiveConvergencePlot
 from .population import PopulationInitialization, initialize_population
@@ -43,6 +45,9 @@ class DifferentialEvolutionOptimizer:
         random_state: int | None = None,
         live_plot: bool = True,
         mode: str = "minimize",
+        live_plot_path: str | Path | None = None,
+        live_plot_refresh_seconds: float = 2.0,
+        show_progress: bool = True,
     ) -> None:
         """Configure the optimizer.
 
@@ -63,6 +68,11 @@ class DifferentialEvolutionOptimizer:
             live_plot: Whether to attempt live convergence plotting.
             mode: Optimization direction, either ``"minimize"`` or
                 ``"maximize"``.
+            live_plot_path: Optional HTML file path for browser-based live plot
+                publishing during optimization.
+            live_plot_refresh_seconds: Time between live HTML refreshes.
+            show_progress: Whether to display a tqdm progress bar while the
+                optimizer runs.
 
         The optimizer evolves candidates in an internally normalized
         ``[0, 1]^n`` search space, then converts them back to the original
@@ -89,6 +99,8 @@ class DifferentialEvolutionOptimizer:
             raise ValueError("clone_ratio must be between 0 and 1 inclusive.")
         if mode not in {"minimize", "maximize"}:
             raise ValueError("mode must be either 'minimize' or 'maximize'.")
+        if live_plot_refresh_seconds <= 0:
+            raise ValueError("live_plot_refresh_seconds must be greater than 0.")
 
         self.objective_function = objective_function
         self.bounds: Bounds = validate_bounds(bounds)
@@ -103,9 +115,18 @@ class DifferentialEvolutionOptimizer:
         self.random_state = random_state
         self.live_plot = bool(live_plot)
         self.mode = mode
+        self.live_plot_path = Path(live_plot_path) if live_plot_path is not None else None
+        self.live_plot_refresh_seconds = float(live_plot_refresh_seconds)
+        self.show_progress = bool(show_progress)
 
         self.rng = np.random.default_rng(random_state)
         self.plot = LiveConvergencePlot(enabled=self.live_plot, mode=self.mode)
+        self.plot.set_total_generations(self.max_generations)
+        if self.live_plot and self.live_plot_path is not None:
+            self.plot.configure_live_updates(
+                output_path=self.live_plot_path,
+                refresh_interval_seconds=self.live_plot_refresh_seconds,
+            )
 
         self.population: np.ndarray | None = None
         self.evaluations: np.ndarray | None = None
@@ -180,42 +201,58 @@ class DifferentialEvolutionOptimizer:
         self.mean_evaluation_history = []
         self.generation_history = []
         self._record_history(generation=0)
+        self.plot.publish_live(force=True)
 
-        for generation in range(1, self.max_generations + 1):
-            best_index = self._best_index()
-            best_vector = self.population[best_index].copy()
+        with tqdm(
+            total=self.max_generations,
+            disable=not self.show_progress,
+            desc="DEO progress",
+            unit="gen",
+            dynamic_ncols=True,
+        ) as progress_bar:
+            for generation in range(1, self.max_generations + 1):
+                best_index = self._best_index()
+                best_vector = self.population[best_index].copy()
 
-            for target_index in range(self.pop_size):
-                r1, r2 = select_distinct_indices(
-                    pop_size=self.pop_size,
-                    exclude=target_index,
-                    rng=self.rng,
-                    count=2,
+                for target_index in range(self.pop_size):
+                    r1, r2 = select_distinct_indices(
+                        pop_size=self.pop_size,
+                        exclude=target_index,
+                        rng=self.rng,
+                        count=2,
+                    )
+                    target = self.population[target_index]
+                    mutant = mutate_best1(
+                        population=self.population,
+                        best_vector=best_vector,
+                        r1=r1,
+                        r2=r2,
+                        F=self.F,
+                    )
+                    trial = crossover_binomial(
+                        target=target,
+                        mutant=mutant,
+                        CR=self.CR,
+                        rng=self.rng,
+                    )
+                    trial = clip_to_bounds(trial, self.search_bounds)
+                    trial_evaluation = self._evaluate_normalized(trial)
+                    trial_score = self._selection_score(trial_evaluation)
+
+                    if trial_score < self.selection_scores[target_index]:
+                        self.population[target_index] = trial
+                        self.evaluations[target_index] = trial_evaluation
+                        self.selection_scores[target_index] = trial_score
+
+                self._record_history(generation=generation)
+                self.plot.publish_live()
+                progress_bar.update(1)
+                progress_bar.set_postfix_str(
+                    f"generation {generation}/{self.max_generations}",
+                    refresh=False,
                 )
-                target = self.population[target_index]
-                mutant = mutate_best1(
-                    population=self.population,
-                    best_vector=best_vector,
-                    r1=r1,
-                    r2=r2,
-                    F=self.F,
-                )
-                trial = crossover_binomial(
-                    target=target,
-                    mutant=mutant,
-                    CR=self.CR,
-                    rng=self.rng,
-                )
-                trial = clip_to_bounds(trial, self.search_bounds)
-                trial_evaluation = self._evaluate_normalized(trial)
-                trial_score = self._selection_score(trial_evaluation)
 
-                if trial_score < self.selection_scores[target_index]:
-                    self.population[target_index] = trial
-                    self.evaluations[target_index] = trial_evaluation
-                    self.selection_scores[target_index] = trial_score
-
-            self._record_history(generation=generation)
+        self.plot.publish_live(force=True, final=True)
 
         return self.best_vector.copy(), float(self.best_evaluation)
 
